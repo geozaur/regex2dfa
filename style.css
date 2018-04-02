@@ -1,0 +1,13 @@
+body {
+    padding-top: 1em;
+    padding-left: 1em;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    color: white;
+    background-color: #2F2F2F;
+}
+
+#draw-dfa {
+    width: 600px;
+    height: 600px;
+    border: solid 1px white;
+}

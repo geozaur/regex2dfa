@@ -1,0 +1,404 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <title>RegEx to DFA</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link href="style.css" rel="stylesheet">
+</head>
+
+<body>
+    <h1>RegEx to DFA</h1>
+
+    <div>
+        <p>Current alphabet:</p>
+        <p id="alphabet">0 1</p>
+    </div>
+
+    <div>
+        <p>Supported operations:</p>
+        <p>. * |</p>
+    </div>
+
+    <div>
+        <input type="text" id="alphabet-input" placeholder="Change the alphabet">
+        <button id="alphabet-btn">Set</button>
+
+        <br>
+
+        <input type="text" id="regex-input" placeholder="Input the regular expression">
+        <button id="convert-btn">Convert to DFA</button>
+    </div>
+
+    <br>
+
+    <div id="draw-dfa"></div>
+
+    <br>
+
+    <footer>
+        Written by <b><a href="https://github.com/y0rg1" style="color:gold">y0rg1</a></b>
+    </footer>
+
+    <script src="go.js"></script>
+    <script src="tree.js"></script>
+    <script src="shunting-yard.js"></script>
+    <script>
+        // window.onload = function() {
+        const alphabetP = document.getElementById('alphabet');
+        const alphabetInput = document.getElementById('alphabet-input');
+        const regExInput = document.getElementById('regex-input');
+
+        const diagram = new go.Diagram('draw-dfa');
+
+        let alphabet = ['0', '1'];
+        let specials = ['.', '*', '|', '#', '(', ')'];
+        let precedence = {
+            '.': 0,
+            '*': 1,
+            '|': 1,
+            '(': -1,
+            ')': -1
+        }
+
+        function renderAlphabet() {
+            alphabetP.innerText = alphabet.join(' ');
+            console.log('alphabet: ' + alphabet);
+        }
+
+        function inputIsValid(input) {
+            for (let letter of input) {
+                if (alphabet.indexOf(letter) < 0 && specials.indexOf(letter) < 0) {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        function drawDFA(nodeArr, linkArr) {
+            nodeArr = nodeArr || [{ key: 'A' }, { key: 'B' }];
+            linkArr = linkArr || [{ from: 'A', to: 'B' }];
+
+            document.getElementById('draw-dfa').style.backgroundColor = 'white';
+
+            const $ = go.GraphObject.make;
+
+            diagram.nodeTemplate =
+                $(go.Node, "Auto",
+                    $(go.Shape, "RoundedRectangle",
+                        new go.Binding("fill", "color")),
+                    $(go.TextBlock,
+                        { margin: 3 },
+                        new go.Binding("text", "key"))
+                );
+
+            // diagram.linkTemplate =
+            //     $(go.Link,
+            //         $(go.Shape),
+            //         $(go.Shape, { toArrow: "Standard" }),
+            //         $(go.TextBlock, new go.Binding("text", "text"))
+            //     );
+
+            diagram.linkTemplate =
+                $(go.Link,
+                    $(go.Shape),
+                    $(go.Shape, { toArrow: "Standard" }),
+                    $(go.Panel, "Auto",
+                        $(go.Shape, "Circle", { fill: "lightgray", stroke: "gray" }),
+                        $(go.TextBlock, { margin: 3 },
+                            new go.Binding("text", "text"))
+                    )
+                );
+
+            diagram.model = new go.GraphLinksModel(nodeArr, linkArr);
+        }
+
+        function convertToDfa(input) {
+            /* 
+                1. regex = (r).#
+            */
+
+            if (alphabet.indexOf('#') < 0) {
+                alphabet.push('#');
+            }
+
+            let regex = ['('];
+            input.forEach((elem, i, arr) => {
+                regex[i + 1] = elem;
+            });
+            regex.push(')');
+            regex.push('.');
+            regex.push('#');
+
+            console.log('regex ' + regex);
+
+
+            /*
+                2. build syntax tree
+            */
+
+            // convert infix to postfix notation
+            let stack = shuntingYard(regex, alphabet, precedence);
+            console.log('stack', stack);
+
+            // root is always cat node
+            let st = new tree(new node(stack.pop(), null, null, 'cat'));
+
+            while (stack.length > 0) {
+                let token = stack.pop();
+                if (alphabet.indexOf(token) >= 0) {
+                    st.insert(new node(token, null, null, 'leaf'));
+                } else {
+                    switch (token) {
+                        case '*':
+                            st.insert(new node(token, null, new node('null', null, null, 'null'), 'star'));
+                            break;
+                        case '|':
+                            st.insert(new node(token, null, null, 'or'));
+                            break;
+                        case '.':
+                            st.insert(new node(token, null, null, 'cat'));
+                            break;
+                    }
+                }
+            }
+
+
+            /*
+                3. add positions
+            */
+
+            // symbol - position mapping
+            let symPosMap = {};
+            alphabet.forEach(sym => symPosMap[sym] = []);
+
+            let pos = 1;
+            st.visit = (node) => {
+                if (node.type == 'leaf') {
+                    node.position = pos++;
+                    symPosMap[node.value] = symPosMap[node.value] ? union(symPosMap[node.value], [node.position]) : [node.position];
+                }
+            }
+            st.inorder();
+
+            console.log('symPosMap');
+            console.log(symPosMap);
+
+
+            /*
+                4. firstpos, lastpos, nullable, followpos
+            */
+
+            // firstpos, lastpos, nullable
+            let firstpos = {};
+            let lastpos = {};
+            let nullable = {};
+
+            st.visit = (node) => {
+                switch (node.type) {
+                    case 'leaf':
+                        firstpos[node.id] = [node.position];
+                        lastpos[node.id] = [node.position];
+                        nullable[node.id] = false;
+                        break;
+                    case 'or':
+                        firstpos[node.id] = union(firstpos[node.left.id], firstpos[node.right.id]);
+                        lastpos[node.id] = union(lastpos[node.left.id], lastpos[node.right.id]);
+                        nullable[node.id] = nullable[node.left.id] || nullable[node.right.id];
+                        break;
+                    case 'cat':
+                        firstpos[node.id] = nullable[node.left.id] ? union(firstpos[node.left.id], firstpos[node.right.id]) : firstpos[node.left.id];
+                        lastpos[node.id] = nullable[node.right.id] ? union(lastpos[node.left.id], lastpos[node.right.id]) : lastpos[node.right.id];
+                        nullable[node.id] = nullable[node.left.id] && nullable[node.right.id];
+                        break;
+                    case 'star':
+                        firstpos[node.id] = firstpos[node.left.id];
+                        lastpos[node.id] = lastpos[node.left.id];
+                        nullable[node.id] = true;
+                        break;
+                }
+            }
+            st.postorder();
+
+            // followpos
+            let followpos = [];
+            st.visit = (node) => {
+                switch (node.type) {
+                    case 'cat':
+                        lastpos[node.left.id].forEach(pos => { followpos[pos] = union(followpos[pos] || [], firstpos[node.right.id]); })
+                        break;
+                    case 'star':
+                        lastpos[node.left.id].forEach(pos => { followpos[pos] = union(followpos[pos] || [], firstpos[node.left.id]); })
+                        break;
+                }
+            }
+            st.postorder();
+
+
+            /*
+                5. create DFA
+            */
+
+            const genKey = (() => {
+                let i = 1;
+                return () => i++;
+            })();
+            let states = [{
+                key: genKey(),
+                comp: firstpos[st.root.id],
+                color: intersect(firstpos[st.root.id], symPosMap['#']).length != 0
+                    ? 'purple'
+                    : 'lightblue',
+                marked: false
+            }];
+            let transitions = [];
+
+            function getUnmarkedState() {
+                for (let i = 0; i < states.length; i++) {
+                    if (!states[i].marked) {
+                        return states[i];
+                    }
+                }
+
+                return null;
+            }
+
+            // remove # from alphabet
+            alphabet.splice(alphabet.indexOf('#'), 1);
+
+            while (true) {
+                let state = states.find(x => x.marked == false);
+
+                if (state) {
+                    state.marked = true;
+                    alphabet.forEach(sym => {
+                        let positions = intersect(state.comp, symPosMap[sym]);
+                        let comp = positions.reduce((accumulator, current) => union(accumulator, followpos[current]), []);
+
+                        if (comp.length != 0) {
+                            let existingState = states.find(x => equals(x.comp, comp));
+
+                            if (!existingState) {
+                                let newState = {
+                                    key: genKey(),
+                                    comp: comp,
+                                    color: intersect(comp, symPosMap['#']).length != 0
+                                        ? 'lightgreen' // final state
+                                        : 'orange',    // non final state
+                                    marked: false
+                                }
+
+                                states.push(newState);
+                                transitions.push({
+                                    from: state.key,
+                                    to: newState.key,
+                                    text: sym
+                                })
+                            } else {
+                                transitions.push({
+                                    from: state.key,
+                                    to: existingState.key,
+                                    text: sym
+                                })
+                            }
+                        }
+                    });
+                } else {
+                    break;
+                }
+            }
+
+            console.log('states');
+            console.log(states);
+
+            console.log('transitions');
+            console.log(transitions);
+
+            drawDFA(states, transitions);
+        }
+
+        // helper functions
+
+        function equals(arr1, arr2) {
+            if (arr1.length != arr2.length) {
+                return false;
+            }
+
+            for (let i = 0; i < arr1.length; i++) {
+                if (arr1[i] != arr2[i]) {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        function intersect(arr1, arr2) {            
+            return arr1.filter(x => arr2.indexOf(x) != -1);
+        }
+
+        function union(arr1, arr2) {
+            return arr1.concat(arr2).filter((item, pos, arr) => arr.indexOf(item) == pos).sort();
+        }
+
+        function infoVisit() {
+            console.log('id\t\ttype\t\tvalue\t\tposition');
+            return (node) => {
+                switch (node.type) {
+                    case 'cat':
+                        console.log(`${node.id}\t\tcat \t\t${node.value}\t\t${node.position}`);
+                        break;
+                    case 'or':
+                        console.log(`${node.id}\t\tor  \t\t${node.value}\t\t${node.position}`);
+                        break;
+                    default:
+                        console.log(`${node.id}\t\t${node.type}\t\t${node.value}\t\t${node.position}`);
+                        break;
+                }
+            }
+        }
+
+
+        // ui handlers
+
+        document.getElementById('alphabet-btn').onclick = () => {
+            let input = alphabetInput.value;
+
+            console.log('input: ' + input);
+
+            for (let sym of input) {
+                if (specials.indexOf(sym) >= 0) {
+                    alphabetInput.value = '';
+                    alert("Cannot use '.', '|', '#', '(', ')' as symbols!");
+                    return;
+                }
+            }
+
+            // split string into symbols
+            alphabet = input.split(/[-,;\s]/);
+
+            // remove duplicates and empty values
+            alphabet = alphabet.filter((val, i, arr) => val && arr.indexOf(val) == i);
+
+            renderAlphabet();
+        }
+
+        document.getElementById('convert-btn').onclick = () => {
+            let input = Array.from(regExInput.value);
+
+            console.log('input: ' + input);
+
+            if (inputIsValid(input)) {
+                convertToDfa(input);
+            } else {
+                regExInput.value = '';
+                alert('Input is not valid!');
+            }
+        }
+            // }();
+    </script>
+</body>
+
+</html>
